@@ -102,11 +102,12 @@ class CustomHighwayEnvFast(HighwayEnvFast):
         scaled_speed = utils.lmap(forward_speed, self.config["reward_speed_range"], [0, 1])
         self._blocked_vehicles = self.congest_vehicles(self.vehicle)
         scaled_congest_level = utils.lmap(self._blocked_vehicles, self.config["reward_congest_range"], [0, 1])
+        print(f"scaled_congest_level {scaled_congest_level}")
         reward = \
             + self.config["collision_reward"] * self.vehicle.crashed \
             + self.config["right_lane_reward"] * lane / max(len(neighbours) - 1, 1) \
             + self.config["high_speed_reward"] * np.clip(scaled_speed, 0, 1) \
-            + self.config["lane_congest_reward"] * scaled_congest_level
+            + self.config["lane_congest_reward"] * np.clip(scaled_congest_level, 0, 1)
         reward = utils.lmap(reward,
                           [self.config["collision_reward"] + self.config["lane_congest_reward"],
                            self.config["high_speed_reward"] + self.config["right_lane_reward"]],
