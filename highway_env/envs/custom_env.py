@@ -24,7 +24,7 @@ class CustomHighwayEnvFast(HighwayEnvFast):
             "ego_spacing": 1.5,
             "longitudinal_position_offset": 100,
             "feature_collision_check_time": 1.0,
-            "congest_reward": -0.5,
+            "congest_reward": -0.8,
             "reward_congest_range": [0, 3],
         })
         return cfg
@@ -55,36 +55,8 @@ class CustomHighwayEnvFast(HighwayEnvFast):
         # Accurate rectangular check
         intersecting, will_intersect, _ = utils.are_polygons_intersecting(this.polygon(), other.polygon(), this.velocity * dt, other.velocity * dt)
         return intersecting or will_intersect
-        
-    def congest_vehicles(self, vehicle: 'kinematics.Vehicle', congest_distance: float = 30.0) \
-            -> int:
-        """
-        Find the preceding and following vehicles of a given vehicle.
 
-        :param vehicle: the vehicle whose neighbours must be found
-        :param lane_index: the lane on which to look for preceding and following vehicles.
-                     It doesn't have to be the current vehicle lane but can also be another lane, in which case the
-                     vehicle is projected on it considering its local coordinates in the lane.
-        :return: its preceding vehicle, its following vehicle
-        """
-        lane_index = vehicle.lane_index
-        if not lane_index:
-            return 0
-        lane = self.road.network.get_lane(lane_index)
-        s = self.road.network.get_lane(lane_index).local_coordinates(vehicle.position)[0]
-
-        vehicles_behind = 0
-        for v in self.road.vehicles + self.road.objects:
-            if v is not vehicle and not isinstance(v, Landmark):  # self.network.is_connected_road(v.lane_index,
-                # lane_index, same_lane=True):
-                s_v, lat_v = lane.local_coordinates(v.position)
-                if not lane.on_lane(v.position, s_v, lat_v, margin=1):
-                    continue
-                if s_v < s and (abs(s_v - s) < congest_distance):
-                    vehicles_behind += 1
-        return vehicles_behind
-
-    def vehicles_behind(self, vehicle: 'kinematics.Vehicle', verbose: int = 0) \
+    def vehicles_behind(self, vehicle: 'kinematics.Vehicle', distance: float = None, verbose: int = 0) \
             -> int:
         """
         Find the preceding and following vehicles of a given vehicle.
@@ -107,7 +79,7 @@ class CustomHighwayEnvFast(HighwayEnvFast):
                 s_v, lat_v = lane.local_coordinates(v.position)
                 if not lane.on_lane(v.position, s_v, lat_v, margin=1):
                     continue
-                if s > s_v and abs(vehicle.lane_distance_to(v)) < (self.config["reward_congest_range"][1] + 1)* Vehicle.LENGTH:
+                if s > s_v and abs(vehicle.lane_distance_to(v)) < distance if distance is not None else (self.config["reward_congest_range"][1] + 3)* Vehicle.LENGTH:
                     v_rear += 1
                     if verbose > 0:
                         print(f"blocked vehicles: {v}")
@@ -125,15 +97,19 @@ class CustomHighwayEnvFast(HighwayEnvFast):
         # Use forward speed rather than speed, see https://github.com/eleurent/highway-env/issues/268
         forward_speed = self.vehicle.speed * np.cos(self.vehicle.heading)
         scaled_speed = utils.lmap(forward_speed, self.config["reward_speed_range"], [0, 1])
-        self._vehicles_blocked = self.vehicles_behind(self.vehicle)
+        self._vehicles_blocked = self.vehicles_behind(self.vehicle, 40.0)
         scaled_blocked_vehicles = utils.lmap(self._vehicles_blocked, self.config["reward_congest_range"], [0, 1])
-        reward = \
-            + self.config["collision_reward"] * self.vehicle.crashed \
-            + self.config["right_lane_reward"] * lane / max(len(neighbours) - 1, 1) \
+        # reward = \
+        #     + self.config["collision_reward"] * self.vehicle.crashed \
+        #     + self.config["right_lane_reward"] * lane / max(len(neighbours) - 1, 1) \
+        #     + self.config["high_speed_reward"] * np.clip(scaled_speed, 0, 1) \
+        #     + self.config["congest_reward"] * np.clip(scaled_blocked_vehicles, 0, 1)
+        reward = self.config["collision_reward"] if self.vehicle.crashed else \
+            self.config["right_lane_reward"] * lane / max(len(neighbours) - 1, 1) \
             + self.config["high_speed_reward"] * np.clip(scaled_speed, 0, 1) \
-            + self.config["congest_reward"] * np.clip(scaled_blocked_vehicles, 0, 1)
+            + self.config["congest_reward"] * np.clip(scaled_blocked_vehicles, 0, 1) 
         reward = utils.lmap(reward,
-                          [self.config["collision_reward"] + self.config["congest_reward"],
+                          [self.config["collision_reward"],
                            self.config["high_speed_reward"] + self.config["right_lane_reward"]],
                           [0, 1])
         reward = 0 if not self.vehicle.on_road else reward
