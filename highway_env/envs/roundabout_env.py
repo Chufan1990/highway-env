@@ -1,4 +1,4 @@
-from typing import Tuple
+from typing import Tuple, Dict, Text
 
 from gym.envs.registration import register
 import numpy as np
@@ -33,23 +33,33 @@ class RoundaboutEnv(AbstractEnv):
             "screen_width": 600,
             "screen_height": 600,
             "centering_position": [0.5, 0.6],
-            "duration": 11
+            "duration": 11,
+            "normalize_reward": True
         })
         return config
 
     def _reward(self, action: int) -> float:
-        lane_change = action == 0 or action == 2
-        reward = self.config["collision_reward"] * self.vehicle.crashed \
-            + self.config["high_speed_reward"] * \
-                 MDPVehicle.get_speed_index(self.vehicle) / (MDPVehicle.DEFAULT_TARGET_SPEEDS.size - 1) \
-            + self.config["lane_change_reward"] * lane_change
-        return utils.lmap(reward,
-                          [self.config["collision_reward"] + self.config["lane_change_reward"],
-                           self.config["high_speed_reward"]], [0, 1])
+        rewards = self._rewards(action)
+        reward = sum(self.config.get(name, 0) * reward for name, reward in rewards.items())
+        if self.config["normalize_reward"]:
+            reward = utils.lmap(reward, [self.config["collision_reward"], self.config["high_speed_reward"]], [0, 1])
+        reward *= rewards["on_road_reward"]
+        return reward
 
-    def _is_terminal(self) -> bool:
-        """The episode is over when a collision occurs or when the access ramp has been passed."""
-        return self.vehicle.crashed or self.steps >= self.config["duration"]
+    def _rewards(self, action: int) -> Dict[Text, float]:
+        return {
+            "collision_reward": self.vehicle.crashed,
+            "high_speed_reward":
+                 MDPVehicle.get_speed_index(self.vehicle) / (MDPVehicle.DEFAULT_TARGET_SPEEDS.size - 1),
+            "lane_change_reward": action in [0, 2],
+            "on_road_reward": self.vehicle.on_road
+        }
+
+    def _is_terminated(self) -> bool:
+        return self.vehicle.crashed
+
+    def _is_truncated(self) -> bool:
+        return self.time >= self.config["duration"]
 
     def _reset(self) -> None:
         self._make_road()

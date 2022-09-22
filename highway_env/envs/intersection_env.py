@@ -1,4 +1,4 @@
-from typing import Dict, Tuple
+from typing import Dict, Tuple, Text
 
 from gym.envs.registration import register
 import numpy as np
@@ -64,32 +64,50 @@ class IntersectionEnv(AbstractEnv):
         return config
 
     def _reward(self, action: int) -> float:
-        # Cooperative multi-agent reward
-        return sum(self._agent_reward(action, vehicle) for vehicle in self.controlled_vehicles) \
-               / len(self.controlled_vehicles)
+        """Aggregated reward, for cooperative agents."""
+        return sum(self._agent_reward(action, vehicle) for vehicle in self.controlled_vehicles
+                   ) / len(self.controlled_vehicles)
+
+    def _rewards(self, action: int) -> Dict[Text, float]:
+        """Multi-objective rewards, for cooperative agents."""
+        agents_rewards = [self._agent_rewards(action, vehicle) for vehicle in self.controlled_vehicles]
+        return {
+            name: sum(agent_rewards[name] for agent_rewards in agents_rewards) / len(agents_rewards)
+            for name in agents_rewards[0].keys()
+        }
 
     def _agent_reward(self, action: int, vehicle: Vehicle) -> float:
-        scaled_speed = utils.lmap(self.vehicle.speed, self.config["reward_speed_range"], [0, 1])
-        reward = self.config["collision_reward"] * vehicle.crashed \
-                 + self.config["high_speed_reward"] * np.clip(scaled_speed, 0, 1)
-
-        reward = self.config["arrived_reward"] if self.has_arrived(vehicle) else reward
+        """Per-agent reward signal."""
+        rewards = self._agent_rewards(action, vehicle)
+        reward = sum(self.config.get(name, 0) * reward for name, reward in rewards.items())
+        reward = self.config["arrived_reward"] if rewards["arrived_reward"] else reward
+        reward *= rewards["on_road_reward"]
         if self.config["normalize_reward"]:
             reward = utils.lmap(reward, [self.config["collision_reward"], self.config["arrived_reward"]], [0, 1])
-        reward = 0 if not vehicle.on_road else reward
         return reward
 
-    def _is_terminal(self) -> bool:
+    def _agent_rewards(self, action: int, vehicle: Vehicle) -> Dict[Text, float]:
+        """Per-agent per-objective reward signal."""
+        scaled_speed = utils.lmap(vehicle.speed, self.config["reward_speed_range"], [0, 1])
+        return {
+            "collision_reward": vehicle.crashed,
+            "high_speed_reward": np.clip(scaled_speed, 0, 1),
+            "arrived_reward": self.has_arrived(vehicle),
+            "on_road_reward": vehicle.on_road
+        }
+
+    def _is_terminated(self) -> bool:
         return any(vehicle.crashed for vehicle in self.controlled_vehicles) \
                or all(self.has_arrived(vehicle) for vehicle in self.controlled_vehicles) \
-               or self.steps >= self.config["duration"] * self.config["policy_frequency"] \
                or (self.config["offroad_terminal"] and not self.vehicle.on_road)
 
     def _agent_is_terminal(self, vehicle: Vehicle) -> bool:
         """The episode is over when a collision occurs or when the access ramp has been passed."""
         return vehicle.crashed \
-            or self.steps >= self.config["duration"] * self.config["policy_frequency"] \
             or self.has_arrived(vehicle)
+
+    def _is_truncated(self) -> bool:
+        return self.time >= self.config["duration"]
 
     def _info(self, obs: np.ndarray, action: int) -> dict:
         info = super()._info(obs, action)
@@ -101,11 +119,11 @@ class IntersectionEnv(AbstractEnv):
         self._make_road()
         self._make_vehicles(self.config["initial_vehicle_count"])
 
-    def step(self, action: int) -> Tuple[np.ndarray, float, bool, dict]:
-        obs, reward, done, info = super().step(action)
+    def step(self, action: int) -> Tuple[np.ndarray, float, bool, bool, dict]:
+        obs, reward, terminated, truncated, info = super().step(action)
         self._clear_vehicles()
         self._spawn_vehicle(spawn_probability=self.config["spawn_probability"])
-        return obs, reward, done, info
+        return obs, reward, terminated, truncated, info
 
     def _make_road(self) -> None:
         """
@@ -244,10 +262,6 @@ class IntersectionEnv(AbstractEnv):
                and "o" in vehicle.lane_index[1] \
                and vehicle.lane.local_coordinates(vehicle.position)[0] >= exit_distance
 
-    def _cost(self, action: int) -> float:
-        """The constraint signal is the occurrence of collisions."""
-        return float(self.vehicle.crashed)
-
 
 class MultiAgentIntersectionEnv(IntersectionEnv):
     @classmethod
@@ -272,6 +286,25 @@ class MultiAgentIntersectionEnv(IntersectionEnv):
         })
         return config
 
+class ContinuousIntersectionEnv(IntersectionEnv):
+    @classmethod
+    def default_config(cls) -> dict:
+        config = super().default_config()
+        config.update({
+            "observation": {
+                "type": "Kinematics",
+                "vehicles_count": 5,
+                "features": ["presence", "x", "y", "vx", "vy", "long_off", "lat_off", "ang_off"],
+            },
+            "action": {
+                "type": "ContinuousAction",
+                "steering_range": [-np.pi / 3, np.pi / 3],
+                "longitudinal": True,
+                "lateral": True,
+                "dynamical": True
+            },
+        })
+        return config
 
 TupleMultiAgentIntersectionEnv = MultiAgentWrapper(MultiAgentIntersectionEnv)
 
@@ -279,6 +312,11 @@ TupleMultiAgentIntersectionEnv = MultiAgentWrapper(MultiAgentIntersectionEnv)
 register(
     id='intersection-v0',
     entry_point='highway_env.envs:IntersectionEnv',
+)
+
+register(
+    id='intersection-v1',
+    entry_point='highway_env.envs:ContinuousIntersectionEnv',
 )
 
 register(

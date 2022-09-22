@@ -26,6 +26,8 @@ class Vehicle(RoadObject):
     """ Range for random initial speeds [m/s] """
     MAX_SPEED = 40.
     """ Maximum reachable speed [m/s] """
+    MIN_SPEED = -40.
+    """ Minimum reachable speed [m/s] """
     HISTORY_SIZE = 30
     """ Length of the vehicle state history, for trajectory display"""
 
@@ -136,8 +138,8 @@ class Vehicle(RoadObject):
         self.action['acceleration'] = float(self.action['acceleration'])
         if self.speed > self.MAX_SPEED:
             self.action['acceleration'] = min(self.action['acceleration'], 1.0 * (self.MAX_SPEED - self.speed))
-        elif self.speed < -self.MAX_SPEED:
-            self.action['acceleration'] = max(self.action['acceleration'], 1.0 * (self.MAX_SPEED - self.speed))
+        elif self.speed < self.MIN_SPEED:
+            self.action['acceleration'] = max(self.action['acceleration'], 1.0 * (self.MIN_SPEED - self.speed))
 
     def on_state_update(self) -> None:
         if self.road:
@@ -187,6 +189,15 @@ class Vehicle(RoadObject):
         else:
             return np.zeros((2,))
 
+    @property
+    def lane_offset(self) -> np.ndarray:
+        if self.lane is not None:
+            long, lat = self.lane.local_coordinates(self.position)
+            ang = self.lane.local_angle(self.heading, long)
+            return np.array([long, lat, ang])
+        else:
+            return np.zeros((3,))
+
     def to_dict(self, origin_vehicle: "Vehicle" = None, observe_intentions: bool = True) -> dict:
         d = {
             'presence': 1,
@@ -198,7 +209,10 @@ class Vehicle(RoadObject):
             'cos_h': self.direction[0],
             'sin_h': self.direction[1],
             'cos_d': self.destination_direction[0],
-            'sin_d': self.destination_direction[1]
+            'sin_d': self.destination_direction[1],
+            'long_off': self.lane_offset[0],
+            'lat_off': self.lane_offset[1],
+            'ang_off': self.lane_offset[2],
         }
         if not observe_intentions:
             d["cos_d"] = d["sin_d"] = 0
